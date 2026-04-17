@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
+MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017").strip().strip('"').strip("'")
 DB_NAME     = os.getenv("DB_NAME", "kenyanews")
 
 client: AsyncIOMotorClient = None
