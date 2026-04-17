@@ -18,7 +18,7 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException, Depends, Query, Header, status
+from fastapi import FastAPI, HTTPException, Depends, Query, Header, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from bson import ObjectId
@@ -27,6 +27,11 @@ from dotenv import load_dotenv
 from database import connect_db, close_db, stories_collection, subscribers_collection
 from models   import StoryCreate, StoryResponse, PaginatedStories, SubscriberCreate
 
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
+limiter = Limiter(key_func=get_remote_address)
 load_dotenv()
 logger = logging.getLogger(__name__)
 
@@ -75,6 +80,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
 
 # ─────────────────────────────────────────
 # Auth dependency
@@ -100,12 +116,14 @@ def serialise(doc: dict) -> dict:
 # ─────────────────────────────────────────
 
 @app.get("/health")
-async def health():
+@limiter.limit("60/minute")
+async def health(request: Request):
     return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
 @app.get("/api/stats")
-async def get_stats():
+@limiter.limit("100/minute")
+async def get_stats(request: Request):
     col = stories_collection()
     total = await col.count_documents({})
     by_category = {}
@@ -123,7 +141,9 @@ async def get_stats():
 
 
 @app.get("/api/stories", response_model=PaginatedStories)
+@limiter.limit("100/minute")
 async def get_stories(
+    request: Request,
     page:     int = Query(1, ge=1),
     size:     int = Query(20, ge=1, le=100),
     category: str = Query(None),
@@ -151,7 +171,8 @@ async def get_stories(
 
 
 @app.get("/api/stories/category/{category}")
-async def get_by_category(category: str, limit: int = Query(20, ge=1, le=100)):
+@limiter.limit("100/minute")
+async def get_by_category(request: Request, category: str, limit: int = Query(20, ge=1, le=100)):
     col  = stories_collection()
     cur  = col.find({"category": category}).sort("timestamp", -1).limit(limit)
     docs = [serialise(d) async for d in cur]
@@ -159,7 +180,9 @@ async def get_by_category(category: str, limit: int = Query(20, ge=1, le=100)):
 
 
 @app.get("/api/search")
+@limiter.limit("60/minute")
 async def search_stories(
+    request: Request,
     q:    str = Query(..., min_length=2),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
@@ -176,7 +199,8 @@ async def search_stories(
 
 
 @app.get("/api/stories/{story_id}")
-async def get_story(story_id: str):
+@limiter.limit("100/minute")
+async def get_story(request: Request, story_id: str):
     try:
         oid = ObjectId(story_id)
     except Exception:
@@ -189,7 +213,8 @@ async def get_story(story_id: str):
 
 
 @app.post("/api/stories", status_code=201)
-async def create_story(story: StoryCreate, _: str = Depends(verify_api_key)):
+@limiter.limit("30/minute")
+async def create_story(request: Request, story: StoryCreate, _: str = Depends(verify_api_key)):
     col = stories_collection()
     # Check duplicate by headline
     existing = await col.find_one({"headline": story.headline})
@@ -203,7 +228,8 @@ async def create_story(story: StoryCreate, _: str = Depends(verify_api_key)):
 
 
 @app.post("/api/subscribe", status_code=201)
-async def subscribe(sub: SubscriberCreate):
+@limiter.limit("5/minute")
+async def subscribe(request: Request, sub: SubscriberCreate):
     col = subscribers_collection()
     existing = await col.find_one({"email": sub.email})
     if existing:
@@ -216,7 +242,8 @@ async def subscribe(sub: SubscriberCreate):
 
 
 @app.delete("/api/stories/{story_id}", status_code=204)
-async def delete_story(story_id: str, _: str = Depends(verify_api_key)):
+@limiter.limit("30/minute")
+async def delete_story(request: Request, story_id: str, _: str = Depends(verify_api_key)):
     try:
         oid = ObjectId(story_id)
     except Exception:

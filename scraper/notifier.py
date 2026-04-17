@@ -5,18 +5,16 @@ Recipients are comma-separated in the NOTIFICATION_RECIPIENTS env var.
 """
 
 import os
-import smtplib
+import requests
 import logging
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-GMAIL_USER      = os.getenv("GMAIL_USER", "")
-GMAIL_PASSWORD  = os.getenv("GMAIL_APP_PASSWORD", "")   # Gmail App Password
-RECIPIENTS_RAW  = os.getenv("NOTIFICATION_RECIPIENTS", "")
-SITE_URL        = os.getenv("FRONTEND_URL", "https://kenya-news.vercel.app")
+RESEND_API_KEY    = os.getenv("RESEND_API_KEY", "")
+RESEND_FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL", "KenyaNews <onboarding@resend.dev>")
+RECIPIENTS_RAW    = os.getenv("NOTIFICATION_RECIPIENTS", "")
+SITE_URL          = os.getenv("FRONTEND_URL", "https://kenya-news.vercel.app")
 
 
 # ─────────────────────────────────────────
@@ -128,9 +126,9 @@ def build_html(stories: list[dict]) -> str:
 # ─────────────────────────────────────────
 
 def send_digest(stories: list[dict]) -> bool:
-    """Send the HTML digest to all NOTIFICATION_RECIPIENTS. Returns True on success."""
-    if not GMAIL_USER or not GMAIL_PASSWORD:
-        logger.warning("Gmail credentials not set — skipping email notification.")
+    """Send the HTML digest to all NOTIFICATION_RECIPIENTS via Resend API."""
+    if not RESEND_API_KEY:
+        logger.warning("RESEND_API_KEY not set — skipping email notification.")
         return False
 
     recipients = [r.strip() for r in RECIPIENTS_RAW.split(",") if r.strip()]
@@ -143,30 +141,37 @@ def send_digest(stories: list[dict]) -> bool:
         f"· {datetime.now(timezone.utc).strftime('%d %b %Y %H:%M')} UTC"
     )
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"]    = f"KenyaNews <{GMAIL_USER}>"
-    msg["To"]      = ", ".join(recipients)
-
-    # Plain-text fallback
     plain = "\n\n".join(
         f"{s['headline']}\n{s.get('summary','')}\n{s.get('link','')}"
         for s in stories[:10]
     )
-    msg.attach(MIMEText(plain, "plain"))
-    msg.attach(MIMEText(build_html(stories), "html"))
+    html_content = build_html(stories)
+
+    payload = {
+        "from": RESEND_FROM_EMAIL,
+        "to": recipients,
+        "subject": subject,
+        "text": plain,
+        "html": html_content
+    }
 
     try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-            smtp.login(GMAIL_USER, GMAIL_PASSWORD)
-            smtp.sendmail(GMAIL_USER, recipients, msg.as_string())
-        logger.info(f"✉ Digest sent to {len(recipients)} recipient(s).")
+        response = requests.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {RESEND_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json=payload,
+            timeout=10
+        )
+        response.raise_for_status()
+        logger.info(f"✉ Digest sent to {len(recipients)} recipient(s) via Resend. (ID: {response.json().get('id')})")
         return True
-    except smtplib.SMTPAuthenticationError:
-        logger.error("Gmail auth failed. Check GMAIL_USER and GMAIL_APP_PASSWORD.")
-        return False
-    except Exception as e:
-        logger.error(f"Failed to send email: {e}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to send email via Resend API: {e}")
+        if hasattr(e, 'response') and e.response is not None:
+            logger.error(f"Response: {e.response.text}")
         return False
 
 

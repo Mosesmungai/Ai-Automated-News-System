@@ -55,8 +55,8 @@ jobs:
         env:
           BACKEND_API_URL:          ${{ secrets.BACKEND_API_URL }}
           BACKEND_API_KEY:          ${{ secrets.BACKEND_API_KEY }}
-          GMAIL_USER:               ${{ secrets.GMAIL_USER }}
-          GMAIL_APP_PASSWORD:       ${{ secrets.GMAIL_APP_PASSWORD }}
+          RESEND_API_KEY:           ${{ secrets.RESEND_API_KEY }}
+          RESEND_FROM_EMAIL:        ${{ secrets.RESEND_FROM_EMAIL }}
           NOTIFICATION_RECIPIENTS:  ${{ secrets.NOTIFICATION_RECIPIENTS }}
           FRONTEND_URL:             ${{ secrets.FRONTEND_URL }}
           # Suppress tokenizer parallelism warnings on CPU
